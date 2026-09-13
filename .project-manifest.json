@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "name": "solo-0005-orchard-phenology-atlas",
+  "project_shape": "fullstack",
+  "modules": [
+    {
+      "id": "app-shell",
+      "path": "frontend/src/app",
+      "responsibility": "图谱台应用壳和工作区协调"
+    },
+    {
+      "id": "catalog-ui",
+      "path": "frontend/src/views/CatalogView.vue",
+      "responsibility": "园区与植株编目工作面"
+    },
+    {
+      "id": "observation-ui",
+      "path": "frontend/src/views/ObservationView.vue",
+      "responsibility": "季节物候记录工作面"
+    },
+    {
+      "id": "comparison-ui",
+      "path": "frontend/src/views/ComparisonView.vue",
+      "responsibility": "品种季节对齐工作面"
+    },
+    {
+      "id": "frontend-domain",
+      "path": "frontend/src/domain",
+      "responsibility": "阶段字典与前端边界规则"
+    },
+    {
+      "id": "api-client",
+      "path": "frontend/src/services",
+      "responsibility": "HTTP 调用与错误映射"
+    },
+    {
+      "id": "transport",
+      "path": "backend/app/transport",
+      "responsibility": "HTTP 协议与响应编码"
+    },
+    {
+      "id": "application",
+      "path": "backend/app/application",
+      "responsibility": "业务用例编排"
+    },
+    {
+      "id": "domain",
+      "path": "backend/app/domain",
+      "responsibility": "实体规则、状态转换与比较计算"
+    },
+    {
+      "id": "persistence",
+      "path": "backend/app/persistence",
+      "responsibility": "进程锁、快照与原子持久化"
+    }
+  ],
+  "complexity": {
+    "mechanisms": [
+      "state_transition",
+      "error_propagation",
+      "resource_lifecycle",
+      "concurrency"
+    ]
+  },
+  "workflows": [
+    {
+      "id": "catalog",
+      "name": "园区与植株编目",
+      "entry": "图谱台：园区档案 / 新建园区与植株",
+      "steps": [
+        "创建园区草稿并校验编号",
+        "向园区加入唯一植株",
+        "检查至少一株有效植株并确认园区"
+      ],
+      "success": "园区转为已确认，植株清单可重新读取",
+      "failure": "重复编号、非法年份或空植株清单被拒绝且状态不变",
+      "verification": "真实浏览器页面操作创建园区和植株，并通过 API 核对确认状态",
+      "module_ids": [
+        "app-shell",
+        "catalog-ui",
+        "api-client",
+        "transport",
+        "application",
+        "domain",
+        "persistence"
+      ]
+    },
+    {
+      "id": "observe",
+      "name": "季节物候记录",
+      "entry": "图谱台：物候观察 / 建立季节志",
+      "steps": [
+        "选择植株并创建季节志",
+        "补录阶段日期、置信度和说明",
+        "校验必需阶段与顺序后完成季节志"
+      ],
+      "success": "季节志冻结为已完成并保留全部物候条目",
+      "failure": "缺阶段、日期倒置或完成后修改均返回稳定错误",
+      "verification": "真实浏览器页面建立季节志、补录阶段并完成，再核对服务端结果",
+      "module_ids": [
+        "app-shell",
+        "observation-ui",
+        "frontend-domain",
+        "api-client",
+        "transport",
+        "application",
+        "domain",
+        "persistence"
+      ]
+    },
+    {
+      "id": "compare",
+      "name": "品种季节对齐",
+      "entry": "图谱台：图谱比较 / 生成对齐结果",
+      "steps": [
+        "选择两份同年已完成季节志",
+        "按共同阶段计算日期偏移",
+        "保存不可变比较图谱"
+      ],
+      "success": "返回共同阶段、偏移天数和确定性摘要",
+      "failure": "年份不同、未完成或无共同阶段时拒绝生成",
+      "verification": "真实浏览器页面选择两项季节志并生成比较，再读取保存结果",
+      "module_ids": [
+        "app-shell",
+        "comparison-ui",
+        "api-client",
+        "transport",
+        "application",
+        "domain",
+        "persistence"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "language": "TypeScript + Vue 3 + Python 3",
+  "project_shape": "fullstack",
+  "source_extensions": [
+    ".ts",
+    ".vue",
+    ".css",
+    ".py",
+    ".mjs"
+  ],
+  "build_command": "npm run build && python3 -m compileall -q backend scripts",
+  "testing": "deferred",
+  "workflow_checks": [
+    {
+      "workflow_id": "catalog",
+      "command": "node scripts/workflow_check.mjs --workflow catalog"
+    },
+    {
+      "workflow_id": "observe",
+      "command": "node scripts/workflow_check.mjs --workflow observe"
+    },
+    {
+      "workflow_id": "compare",
+      "command": "node scripts/workflow_check.mjs --workflow compare"
+    }
+  ]
+}
