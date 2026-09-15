@@ -8,7 +8,7 @@ import threading
 from types import FrameType
 
 from ..config import parse_args
-from ..persistence import Repository
+from ..persistence import Database, Repository
 from .server import create_server
 
 
@@ -18,7 +18,10 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     config = parse_args(argv)
-    repository = Repository(config.state_path, config.lock_path)
+    repository = Repository(
+        Database(config.database_path),
+        legacy_state_path=config.legacy_state_path,
+    )
     repository.open()
     server = create_server(config, repository)
     stopping = threading.Event()

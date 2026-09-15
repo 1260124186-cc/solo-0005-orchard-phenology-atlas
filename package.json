@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4317",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4317"
+    "preview": "vite preview --host 127.0.0.1 --port 4317",
+    "test:backend": "PYTHONPATH=backend python3 -m unittest discover -s backend/tests -v",
+    "check": "npm run build && python3 -m compileall -q backend scripts && npm run test:backend && node scripts/workflow_check.mjs --workflow catalog && node scripts/workflow_check.mjs --workflow observe && node scripts/workflow_check.mjs --workflow compare"
   },
   "dependencies": {
     "@lucide/vue": "^1.45.0",

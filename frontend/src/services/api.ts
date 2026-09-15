@@ -27,10 +27,19 @@ async function request<T>(
   path: string,
   requestInit: RequestInit = {},
 ): Promise<T> {
+  const method = String(requestInit.method ?? "GET").toUpperCase();
+  const actorId =
+    globalThis.localStorage?.getItem("orchardAtlasActor") ?? "local-admin";
+  const idempotencyKey =
+    method === "PUT" || method === "PATCH" || method === "DELETE"
+      ? globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+      : null;
   const response = await fetch(`/api${path}`, {
     ...requestInit,
     headers: {
       Accept: "application/json",
+      "X-Actor-Id": actorId,
+      ...(idempotencyKey ? { "X-Idempotency-Key": idempotencyKey } : {}),
       ...(requestInit.body ? { "Content-Type": "application/json" } : {}),
       ...requestInit.headers,
     },

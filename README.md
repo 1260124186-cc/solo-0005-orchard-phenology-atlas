@@ -2,7 +2,7 @@
 
 面向地方品种保护人员、果园档案员和农业文化研究者的全栈编研工具。产品从园区建档开始，逐株登记果树，按季节记录物候阶段，再将两份已完成的季节志进行确定性对齐，并生成可长期保存的编研简报。
 
-系统不连接外部气象、地图或数据库服务。档案保存在本机 JSON 快照中，便于离线查阅和后续迁移。
+系统不连接外部气象、地图或远程数据库服务。档案保存在本机 SQLite 数据库中，支持事务、迁移、对象版本、审计、幂等写入和后台任务。
 
 ## 主要能力
 
@@ -26,10 +26,13 @@
 ├── backend/app/              Python 标准库服务
 │   ├── application/          用例编排
 │   ├── domain/               实体规则、状态转换和比较计算
-│   ├── persistence/          进程锁、快照与原子落盘
+│   ├── jobs/                 本地任务队列与 worker
+│   ├── persistence/          SQLite、迁移、版本和审计
+│   ├── security/             操作者、作用域与授权
 │   └── transport/            HTTP 路由与响应编码
 ├── scripts/
 │   ├── run_server.py         后端启动入口
+│   ├── run_worker.py         后台任务 worker
 │   └── workflow_check.mjs    三条浏览器工作流检查
 ├── PROJECT_SPEC.md
 ├── .project-manifest.json
@@ -67,6 +70,12 @@ python3 -m compileall -q backend scripts
 python3 scripts/run_server.py --host 127.0.0.1 --port 8765
 ```
 
+需要处理后台任务时，在另一个终端启动 worker：
+
+```bash
+python3 scripts/run_worker.py --data-dir backend/var
+```
+
 再启动前端开发服务：
 
 ```bash
@@ -75,7 +84,9 @@ npm run dev
 
 打开 `http://127.0.0.1:4317`。Vite 会把 `/api` 请求代理到同一个本机后端。
 
-后端数据默认写入 `backend/var/state.json`。可以通过 `--data-dir` 指定其他目录。
+后端数据默认写入 `backend/var/atlas.sqlite3`。如果目录中存在旧版 `state.json`，首次启动会自动迁移到 SQLite。可以通过 `--data-dir` 指定其他目录。
+
+受保护接口需要请求头 `X-Actor-Id`。本机前端默认使用 `local-admin`。写入接口可以携带 `X-Idempotency-Key`，相同操作者、相同键和相同请求体会复用第一次成功结果。
 
 ## 环境变量
 
@@ -83,11 +94,40 @@ npm run dev
 | --- | --- | --- |
 | `ORCHARD_ATLAS_HOST` | 服务监听地址 | `127.0.0.1` |
 | `ORCHARD_ATLAS_PORT` | 服务监听端口 | `8765` |
-| `ORCHARD_ATLAS_DATA_DIR` | JSON 快照目录 | `backend/var` |
+| `ORCHARD_ATLAS_DATA_DIR` | SQLite 数据库与运行文件目录 | `backend/var` |
+| `X-Actor-Id` | 请求操作者标识，默认前端使用 `local-admin` | 必填 |
+| `X-Idempotency-Key` | 写入请求幂等键 | 可选 |
 
 浏览器工作流检查使用固定的本机端口 `8765` 和 `4317`，并使用临时数据目录。
 
-## 工作流检查
+## 测试与工作流检查
+
+后端基础测试：
+
+```bash
+npm run test:backend
+```
+
+测试覆盖数据库迁移、事务写入、并发写入、幂等复用、对象版本、审计、身份作用域、授权撤销和任务生命周期。
+
+一次执行构建、编译、后端测试和三条浏览器工作流：
+
+```bash
+npm run check
+```
+
+需要准备性能或容量场景时，可以生成可重复的规模数据：
+
+```bash
+python3 scripts/generate_dataset.py \
+  --data-dir /tmp/orchard-scale \
+  --plots 1000 \
+  --trees-per-plot 5 \
+  --observations-per-tree 3 \
+  --comparisons 500
+```
+
+生成器会直接建立与业务域一致的园区、植株、完成季节志和比较记录，用于查询、迁移、压缩和并发实验。
 
 三条检查都启动真实后端与真实 Vue 页面，通过浏览器完成关键步骤，再从 API 核对结果：
 
@@ -109,6 +149,17 @@ node scripts/workflow_check.mjs --workflow compare
 
 - `GET /api/health`：服务状态。
 - `GET /api/stages`：固定物候阶段字典。
+- `GET|PUT /api/actors`：查询或创建本机操作者。
+- `GET|PUT /api/grants`：查询或创建资源授权。
+- `PUT /api/grants/{grant_id}/revoke`：撤销授权。
+- `GET /api/audit`：按对象或操作者查询审计事件。
+- `GET /api/versions/{kind}/{id}`：查询对象版本快照。
+- `GET /api/outbox`：查询待发布或已发布的 outbox 事件。
+- `PUT /api/outbox/{event_id}/publish`：确认事件已由本地消费者发布。
+- `GET|PUT /api/jobs`：查询或创建后台任务。
+- `GET /api/jobs/{id}`：查询任务状态。
+- `PUT /api/jobs/{id}/cancel`：取消排队或失败任务。
+- `PUT /api/jobs/{id}/retry`：重试失败、死信或取消任务。
 - `GET|PUT /api/plots`：查询或建立园区。
 - `GET|PATCH /api/plots/{plot_id}`：读取或修订草稿园区。
 - `PUT /api/plots/{plot_id}/confirm`：确认并冻结园区基础信息。
@@ -130,15 +181,17 @@ node scripts/workflow_check.mjs --workflow compare
 - 同一植株、同一年份只能建立一份季节志。
 - 完成后季节志不可增删阶段；完成前必须包含萌芽期、盛花期、坐果期和采收期。
 - 比较只使用双方共同阶段，年份不同、状态未完成或无共同阶段时拒绝生成。
-- 写入接口在进程锁内复制完整快照，使用临时文件、`fsync` 和原子替换提交；落盘失败不会替换内存状态。
-- 修改类接口使用 `revision` 执行乐观并发控制，旧修订号返回冲突错误。
+- 业务写入和审计、outbox、对象版本在同一 SQLite 事务中提交。
+- 修改类接口使用对象 `revision` 执行乐观并发控制，旧修订号返回冲突错误。
+- 已提交写入可通过 `X-Idempotency-Key` 安全重试，同一键不能复用于不同请求。
+- 请求通过 `X-Actor-Id` 识别操作者，并通过能力和资源范围进行授权。
+- 后台任务具有租约、尝试次数、重试时间和死信状态。
+- 数据库迁移记录在 `schema_migrations`，旧版 JSON 快照仅执行一次导入。
 
 ## 测试状态
 
-本项目是初始化基线，`testing` 标记为 `deferred`。当前不包含单元测试、测试夹具或正式 E2E 测试套件，后续代码测试任务负责增加领域边界、仓储故障、并发修订和跨浏览器回归测试。
-
-当前保留的 `workflow_check.mjs` 是生产级有界冒烟检查，用于证明三条业务路径可运行，不等同于完整测试套件。
+后端基础测试已启用，并与生产构建共同构成当前验证入口。三条浏览器工作流继续用于验证真实页面调用；后续测试任务可以在此基础上补充故障注入、迁移兼容和更大规模并发场景。
 
 ## 当前范围
 
-不提供多人账户、远程协作、外部气象数据、地图底图、数据删除、多节点部署和移动端原生应用。内置指南说明不替代农业技术结论。
+不提供远程登录、密码或令牌体系、跨机器账号同步、外部气象数据、地图底图、数据删除、多节点部署和移动端原生应用。本机操作者与授权记录用于本地工作流，不构成远程身份系统。内置指南说明不替代农业技术结论。

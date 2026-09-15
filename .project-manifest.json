@@ -51,7 +51,17 @@
     {
       "id": "persistence",
       "path": "backend/app/persistence",
-      "responsibility": "进程锁、快照与原子持久化"
+      "responsibility": "SQLite 迁移、事务、版本历史和审计 outbox"
+    },
+    {
+      "id": "security",
+      "path": "backend/app/security",
+      "responsibility": "请求身份、资源授权和授权管理"
+    },
+    {
+      "id": "jobs",
+      "path": "backend/app/jobs",
+      "responsibility": "本地后台任务、租约、重试和死信"
     }
   ],
   "complexity": {
@@ -59,7 +69,13 @@
       "state_transition",
       "error_propagation",
       "resource_lifecycle",
-      "concurrency"
+      "concurrency",
+      "idempotency",
+      "authorization",
+      "schema_migration",
+      "background_jobs",
+      "audit_log",
+      "object_versioning"
     ]
   },
   "workflows": [

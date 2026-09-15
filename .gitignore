@@ -6,3 +6,6 @@ __pycache__/
 .vite/
 playwright-report/
 test-results/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

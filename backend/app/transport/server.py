@@ -18,7 +18,15 @@ from ..application import (
 )
 from ..config import RuntimeConfig
 from ..errors import DomainError
+from ..jobs import JobService
 from ..persistence import Repository
+from ..persistence.repository import request_fingerprint
+from ..security import (
+    AuthorizationService,
+    IdentityService,
+    RequestContext,
+    request_scope,
+)
 from .handlers import ApiHandlers, build_router
 from .router import Handler, Router
 
@@ -38,11 +46,13 @@ class AtlasHTTPServer(ThreadingHTTPServer):
         router: Router,
         config: RuntimeConfig,
         repository: Repository,
+        authorization: AuthorizationService,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.router = router
         self.config = config
         self.repository = repository
+        self.authorization = authorization
 
 
 class AtlasRequestHandler(BaseHTTPRequestHandler):
@@ -72,9 +82,36 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query, keep_blank_values=False)
-            handler, params = self.server.router.resolve(method, parsed.path)
-            body = self._read_json_body() if method in {"PUT", "PATCH"} else {}
-            result = self._call_handler(handler, params, query, body)
+            route, params = self.server.router.resolve(method, parsed.path)
+            body = (
+                self._read_json_body()
+                if method in {"PUT", "PATCH", "DELETE"}
+                else {}
+            )
+            actor_id = self.headers.get("X-Actor-Id", "").strip()
+            idempotency_key = self.headers.get("X-Idempotency-Key", "").strip() or None
+            if route.capability is not None:
+                self.server.authorization.require(
+                    actor_id=actor_id,
+                    capability=route.capability,
+                    resource_kind=route.resource_kind or "unknown",
+                    resource_id=_resource_id(route, params, body),
+                )
+            context = RequestContext(
+                actor_id=actor_id or "anonymous",
+                idempotency_key=idempotency_key,
+                request_method=method,
+                request_path=parsed.path,
+                request_hash=request_fingerprint(
+                    actor_id=actor_id or "anonymous",
+                    method=method,
+                    path=parsed.path,
+                    body=body,
+                ),
+                route_template=route.template,
+            )
+            with request_scope(context):
+                result = self._call_handler(route.handler, params, query, body)
             self._send_json(HTTPStatus.OK, result)
         except DomainError as exc:
             self._send_json(exc.status, exc.to_payload())
@@ -186,12 +223,46 @@ def create_server(
     observations = ObservationService(repository)
     comparisons = ComparisonService(repository)
     briefs = BriefService(repository)
-    handlers = ApiHandlers(catalog, observations, comparisons, briefs)
+    jobs = JobService(repository.database)
+    identity = IdentityService(repository.database)
+    handlers = ApiHandlers(
+        catalog,
+        observations,
+        comparisons,
+        briefs,
+        repository,
+        jobs,
+        identity,
+    )
     router = build_router(handlers)
+    authorization = AuthorizationService(repository.database)
     return AtlasHTTPServer(
         (config.host, config.port),
         AtlasRequestHandler,
         router=router,
         config=config,
         repository=repository,
+        authorization=authorization,
     )
+
+
+def _resource_id(
+    route: object,
+    params: dict[str, str],
+    body: dict[str, Any],
+) -> str | None:
+    parameter = getattr(route, "resource_id_param", None)
+    if parameter and parameter in params:
+        return params[parameter]
+    for key in (
+        "plot_id",
+        "tree_id",
+        "observation_id",
+        "comparison_id",
+        "brief_id",
+        "job_id",
+    ):
+        value = body.get(key)
+        if value:
+            return str(value)
+    return None

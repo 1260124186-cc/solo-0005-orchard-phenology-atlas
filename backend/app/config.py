@@ -17,13 +17,12 @@ class RuntimeConfig:
     max_workers: int
 
     @property
-    def state_path(self) -> Path:
-        return self.data_dir / "state.json"
+    def database_path(self) -> Path:
+        return self.data_dir / "atlas.sqlite3"
 
     @property
-    def lock_path(self) -> Path:
-        return self.data_dir / "repository.lock"
-
+    def legacy_state_path(self) -> Path:
+        return self.data_dir / "state.json"
 
 def _bounded_int(value: str, minimum: int, maximum: int, label: str) -> int:
     try:
@@ -59,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> RuntimeConfig:
                 str(Path(__file__).resolve().parents[1] / "var"),
             )
         ),
-        help="JSON 快照目录",
+        help="SQLite 数据库与运行文件目录",
     )
     parser.add_argument(
         "--request-limit",

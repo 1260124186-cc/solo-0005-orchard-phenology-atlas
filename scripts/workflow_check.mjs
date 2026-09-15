@@ -279,9 +279,16 @@ async function seedCompletedSeason(config) {
 }
 
 async function api(path, method = "GET", body) {
+  const mutation = method !== "GET";
   const response = await fetch(`${API_ORIGIN}/api${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: {
+      "X-Actor-Id": "local-admin",
+      ...(mutation
+        ? { "X-Idempotency-Key": `check-${crypto.randomUUID()}` }
+        : {}),
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const payload = await response.json();

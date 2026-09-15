@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "language": "TypeScript + Vue 3 + Python 3",
+  "language": "TypeScript + Vue 3 + Python 3 + SQLite",
   "project_shape": "fullstack",
   "source_extensions": [
     ".ts",
@@ -9,8 +9,9 @@
     ".py",
     ".mjs"
   ],
-  "build_command": "npm run build && python3 -m compileall -q backend scripts",
-  "testing": "deferred",
+  "build_command": "npm run check",
+  "testing": "ready",
+  "test_command": "npm run test:backend",
   "workflow_checks": [
     {
       "workflow_id": "catalog",
