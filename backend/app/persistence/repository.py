@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
+from ..domain.events import DomainEvent, Mutation
 from ..errors import DomainError
 from .snapshot import check_relationships, empty_state, ensure_state_shape
 
@@ -100,15 +101,18 @@ class Repository:
         with self._thread_lock:
             return copy.deepcopy(self._state)
 
-    def atomic_update(self, action: Callable[[dict[str, Any]], T]) -> T:
+    def atomic_update(
+        self,
+        action: Callable[[dict[str, Any]], Mutation[T]],
+    ) -> T:
         with self._thread_lock:
             working = copy.deepcopy(self._state)
-            result = action(working)
+            mutation = action(working)
             working["revision"] = int(working["revision"]) + 1
-            self._append_event(working, result)
+            self._journal_events(working, mutation.events)
             self._write_state(working)
             self._state = working
-            return copy.deepcopy(result)
+            return copy.deepcopy(mutation.result)
 
     def stats(self) -> dict[str, int]:
         state = self.read()
