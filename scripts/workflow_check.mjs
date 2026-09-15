@@ -301,10 +301,15 @@ async function api(path, method = "GET", body) {
 }
 
 function startProcess(command, args) {
+  // 独立进程组：npm 会派生 sh -c vite 等子孙进程，检查结束时必须整组终止，
+  // 否则只杀掉 npm 包装会把 vite/esbuild 孤立，继续占用固定端口 4317，
+  // 串行执行下一条工作流时会在等待服务就绪阶段挂死。
+  const detached = process.platform !== "win32";
   const child = spawn(command, args, {
     cwd: ROOT,
     env: { ...process.env, CI: "1" },
     stdio: ["ignore", "pipe", "pipe"],
+    detached,
   });
   child.output = "";
   child.stdout.on("data", (chunk) => {
@@ -321,13 +326,29 @@ function startProcess(command, args) {
 
 async function stopProcess(child) {
   if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch (error) {
+      child.kill("SIGTERM");
+    }
+  } else {
+    child.kill("SIGTERM");
+  }
   const exited = await Promise.race([
     new Promise((resolveExit) => child.once("exit", () => resolveExit(true))),
     new Promise((resolveTimeout) => setTimeout(() => resolveTimeout(false), 2500)),
   ]);
   if (!exited) {
-    child.kill("SIGKILL");
+    if (process.platform !== "win32" && child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        child.kill("SIGKILL");
+      }
+    } else {
+      child.kill("SIGKILL");
+    }
     console.error("检查进程未能及时退出，已强制结束。");
   }
 }

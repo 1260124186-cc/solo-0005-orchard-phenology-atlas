@@ -12,11 +12,12 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client", "vitest/globals"]
   },
   "include": [
     "frontend/src/**/*.ts",
     "frontend/src/**/*.vue",
-    "frontend/src/**/*.d.ts"
+    "frontend/src/**/*.d.ts",
+    "vitest.config.ts"
   ]
 }
