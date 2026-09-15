@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4317",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 4317"
+    "preview": "vite preview --host 127.0.0.1 --port 4317",
+    "typecheck": "vue-tsc --noEmit",
+    "verify": "node scripts/verify.mjs",
+    "check:hygiene": "node scripts/check_hygiene.mjs",
+    "check:api": "node scripts/api_check.mjs",
+    "check:workflow": "node scripts/workflow_check.mjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.45.0",

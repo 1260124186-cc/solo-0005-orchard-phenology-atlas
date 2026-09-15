@@ -1,0 +1,91 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 统一验证（全链路）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 统一验证（依赖、类型、构建、API、三条工作流）
+        run: node scripts/verify.mjs --with-deps
+
+      - name: 上传失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-logs
+          path: var/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  workflows:
+    name: 浏览器工作流矩阵（${{ matrix.workflow }}）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workflow: catalog
+            api_port: 8765
+            ui_port: 4317
+          - workflow: observe
+            api_port: 8766
+            ui_port: 4318
+          - workflow: compare
+            api_port: 8767
+            ui_port: 4319
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 准备 Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: 运行工作流 ${{ matrix.workflow }}（端口 ${{ matrix.api_port }}/${{ matrix.ui_port }}）
+        run: |
+          node scripts/workflow_check.mjs \
+            --workflow ${{ matrix.workflow }} \
+            --api-port ${{ matrix.api_port }} \
+            --ui-port ${{ matrix.ui_port }}
+
+      - name: 上传失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-${{ matrix.workflow }}-logs
+          path: var/
+          if-no-files-found: ignore
+          retention-days: 7

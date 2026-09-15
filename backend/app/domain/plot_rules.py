@@ -93,7 +93,7 @@ def ensure_unique_plot_code(
             raise ConflictError(
                 "plot_code_exists",
                 "园区编号已存在",
-                code=code,
+                plot_code=code,
             )
 
 
@@ -247,7 +247,7 @@ def ensure_unique_tree_code(
             raise ConflictError(
                 "tree_code_exists",
                 "该园区内植株编号已存在",
-                code=code,
+                tree_code=code,
             )
 
 

@@ -82,10 +82,31 @@ npm run dev
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `ORCHARD_ATLAS_HOST` | 服务监听地址 | `127.0.0.1` |
-| `ORCHARD_ATLAS_PORT` | 服务监听端口 | `8765` |
+| `ORCHARD_ATLAS_PORT` | 服务监听端口（同时影响 Vite 代理目标） | `8765` |
 | `ORCHARD_ATLAS_DATA_DIR` | JSON 快照目录 | `backend/var` |
+| `ORCHARD_VERIFY_API_PORT` | 统一验证的 API 端口 | `8765` |
+| `ORCHARD_VERIFY_UI_PORT` | 统一验证的 UI 端口 | `4317` |
+| `ORCHARD_CHECK_API_PORT` | 单次检查的 API 端口 | `8765` |
+| `ORCHARD_CHECK_UI_PORT` | 单次检查的 UI 端口 | `4317` |
+| `ORCHARD_CHECK_TIMEOUT_MS` | 单次检查整体超时 | `180000` |
 
-浏览器工作流检查使用固定的本机端口 `8765` 和 `4317`，并使用临时数据目录。
+浏览器工作流检查默认使用固定的本机端口 `8765` 和 `4317`，并使用临时数据目录；并行运行时可用 `--api-port` / `--ui-port` 指定其他端口。
+
+## 统一验证
+
+本地与 CI 共用同一条确定顺序的验证链：
+
+```bash
+npm run verify
+```
+
+依次执行：环境预检 → 仓库卫生 → 依赖安装（`npm ci`）→ Playwright Chromium 准备 → 类型检查 → 生产构建 → Python 编译 → API 检查 → `catalog` / `observe` / `compare` 三条浏览器工作流。任一步骤失败立即停止、保留 `var/verify/<运行目录>/` 下的步骤日志并返回非零状态；全部通过时输出各步骤耗时与总耗时。
+
+- `--api-port` / `--ui-port`：更换检查端口，避免本地并行任务互相占用。
+- `--keep-logs`：成功时也保留日志。
+- `--with-deps`：准备浏览器时同时安装系统依赖（CI 使用）。
+
+仓库卫生门禁（`npm run check:hygiene`）阻止运行快照、构建产物、浏览器缓存和临时证据进入 git 索引。GitHub Actions 工作流 `.github/workflows/verify.yml` 在推送与 PR 时运行同一入口，并以矩阵方式用独立端口并行复跑三条工作流。
 
 ## 工作流检查
 
@@ -101,7 +122,7 @@ node scripts/workflow_check.mjs --workflow compare
 - `observe`：建立季节志、补录四个必需阶段、完成并核对冻结结果。
 - `compare`：准备两份同年已完成季节志，在页面生成比较并核对四条阶段偏移。
 
-检查结束后会关闭服务、浏览器和临时数据目录。
+检查结束后会关闭服务、浏览器和临时数据目录。端口被占用、整体超时或收到中断信号时，检查会回收整个子进程组并保留失败日志；端口占用返回退出码 3，其余失败返回 1。
 
 ## HTTP 接口概览
 

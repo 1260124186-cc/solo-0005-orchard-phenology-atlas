@@ -1,48 +1,106 @@
 #!/usr/bin/env node
+/** 单条浏览器工作流检查：真实后端 + 真实 Vite 页面 + Playwright。 */
 
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "playwright";
+import {
+  API_HOST,
+  ROOT,
+  UI_HOST,
+  assertPortFree,
+  createGuard,
+  hasFlag,
+  makeLogDir,
+  makeRuntimeDir,
+  removeDirQuietly,
+  resolvePort,
+  resolveTimeout,
+  startProcess,
+  valueAfter,
+  waitForUrl,
+} from "./lib/check_runtime.mjs";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const API_ORIGIN = "http://127.0.0.1:8765";
-const UI_ORIGIN = "http://127.0.0.1:4317";
 const workflow = valueAfter("--workflow");
+const VALID_WORKFLOWS = new Set(["catalog", "observe", "compare"]);
 
-if (!workflow) {
-  console.error("用法：node scripts/workflow_check.mjs --workflow catalog|observe|compare");
+if (!VALID_WORKFLOWS.has(workflow)) {
+  console.error(
+    "用法：node scripts/workflow_check.mjs --workflow catalog|observe|compare " +
+      "[--api-port 8765] [--ui-port 4317] [--timeout-ms 180000] " +
+      "[--log-dir <目录>] [--keep-logs]",
+  );
   process.exit(2);
 }
 
-const runtimeDir = mkdtempSync(join(tmpdir(), "orchard-atlas-check-"));
-let backend;
-let frontend;
-let browser;
+const API_PORT = resolvePort("--api-port", "ORCHARD_CHECK_API_PORT", 8765);
+const UI_PORT = resolvePort("--ui-port", "ORCHARD_CHECK_UI_PORT", 4317);
+const TIMEOUT_MS = resolveTimeout("--timeout-ms", "ORCHARD_CHECK_TIMEOUT_MS", 180_000);
+const KEEP_LOGS = hasFlag("--keep-logs");
+const API_ORIGIN = `http://${API_HOST}:${API_PORT}`;
+const UI_ORIGIN = `http://${UI_HOST}:${UI_PORT}`;
+
+const logDir = valueAfter("--log-dir") || makeLogDir(`workflow-${workflow}`);
+mkdirSync(logDir, { recursive: true });
+const runtimeDir = makeRuntimeDir();
+const guard = createGuard({
+  timeoutMs: TIMEOUT_MS,
+  scope: `workflow:${workflow}`,
+  logDir,
+});
+guard.state.dirs.push(runtimeDir);
+
+let failed = null;
 
 try {
-  backend = startProcess(
+  // 端口预检：被占用时立即失败并给出定位信息，不干扰占用方进程。
+  await assertPortFree(API_PORT, API_HOST);
+  await assertPortFree(UI_PORT, UI_HOST);
+
+  const backend = startProcess(
     "python3",
     [
       "scripts/run_server.py",
+      "--host",
+      API_HOST,
       "--port",
-      "8765",
+      String(API_PORT),
       "--data-dir",
       runtimeDir,
     ],
+    { logPath: join(logDir, "backend.log"), label: "backend" },
   );
-  await waitForUrl(`${API_ORIGIN}/api/health`);
-  frontend = startProcess("npm", [
-    "run",
-    "dev",
-    "--",
-    "--strictPort",
-  ]);
-  await waitForUrl(`${UI_ORIGIN}/`);
+  guard.state.processes.push(backend);
+  await waitForUrl(`${API_ORIGIN}/api/health`, 20_000, () => backend.output);
 
-  browser = await chromium.launch({ headless: true });
+  const frontend = startProcess(
+    process.execPath,
+    [
+      join(ROOT, "node_modules", "vite", "bin", "vite.js"),
+      "--host",
+      UI_HOST,
+      "--port",
+      String(UI_PORT),
+      "--strictPort",
+    ],
+    {
+      logPath: join(logDir, "frontend.log"),
+      label: "frontend",
+      env: { ORCHARD_ATLAS_PORT: String(API_PORT) },
+    },
+  );
+  guard.state.processes.push(frontend);
+  await waitForUrl(`${UI_ORIGIN}/`, 20_000, () => frontend.output);
+
+  // handleSIG*置 false：信号处理由本脚本的 guard 独占，
+  // 避免 Playwright 默认处理器抢先 process.exit 导致子进程泄漏。
+  const browser = await chromium.launch({
+    headless: true,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
+  });
+  guard.state.browsers.push(browser);
   const context = await browser.newContext({
     viewport: { width: 1440, height: 980 },
     locale: "zh-CN",
@@ -55,24 +113,28 @@ try {
     await checkCatalog(page);
   } else if (workflow === "observe") {
     await checkObservation(page);
-  } else if (workflow === "compare") {
-    await checkComparison(page);
   } else {
-    throw new Error(`未知工作流：${workflow}`);
+    await checkComparison(page);
   }
 
-  await browser.close();
-  browser = undefined;
   console.log(`✅ ${workflow} 浏览器工作流检查通过`);
 } catch (error) {
+  failed = error;
   console.error(`❌ ${workflow} 浏览器工作流检查失败`);
   console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
+  // 端口占用使用专属退出码，便于调用方区分环境问题与断言失败
+  process.exitCode = error instanceof Error && error.message.includes("已被占用") ? 3 : 1;
 } finally {
-  if (browser) await browser.close().catch(() => undefined);
-  await stopProcess(frontend);
-  await stopProcess(backend);
-  rmSync(runtimeDir, { recursive: true, force: true });
+  await guard.cleanup();
+  if (guard.state.watchdog) clearTimeout(guard.state.watchdog);
+  if (failed) {
+    // 失败一律保留日志目录，便于定位
+    console.error(`📁 失败日志保留在 ${logDir}`);
+  } else if (!KEEP_LOGS) {
+    removeDirQuietly(logDir);
+  } else {
+    console.log(`📁 检查日志保留在 ${logDir}`);
+  }
 }
 
 async function checkCatalog(page) {
@@ -291,59 +353,4 @@ async function api(path, method = "GET", body) {
     );
   }
   return payload;
-}
-
-function startProcess(command, args) {
-  const child = spawn(command, args, {
-    cwd: ROOT,
-    env: { ...process.env, CI: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.output = "";
-  child.stdout.on("data", (chunk) => {
-    child.output += chunk.toString();
-  });
-  child.stderr.on("data", (chunk) => {
-    child.output += chunk.toString();
-  });
-  child.on("error", (error) => {
-    child.output += `\n${error.message}`;
-  });
-  return child;
-}
-
-async function stopProcess(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = await Promise.race([
-    new Promise((resolveExit) => child.once("exit", () => resolveExit(true))),
-    new Promise((resolveTimeout) => setTimeout(() => resolveTimeout(false), 2500)),
-  ]);
-  if (!exited) {
-    child.kill("SIGKILL");
-    console.error("检查进程未能及时退出，已强制结束。");
-  }
-}
-
-async function waitForUrl(url, timeout = 20000) {
-  const deadline = Date.now() + timeout;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 180));
-  }
-  const details = backend?.output || frontend?.output || "";
-  throw new Error(
-    `等待 ${url} 超时：${lastError instanceof Error ? lastError.message : details}`,
-  );
-}
-
-function valueAfter(flag) {
-  const index = process.argv.indexOf(flag);
-  return index >= 0 ? process.argv[index + 1] : "";
 }
